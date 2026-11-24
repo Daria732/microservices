@@ -1,0 +1,1624 @@
+{
+  "info": {
+    "name": "FoodFit — Лабораторная №4 (демонстрация)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Перед запуском: `npm start` (или `docker compose up --build`). Запросы выполнять по порядку по папкам. Логи сервисов смотреть в терминале параллельно.\n\nВсе запросы, включая административные операции для демонстрации отказов и просмотра DLQ/компенсаций, выполняются через API Gateway. Для административных запросов используется отдельный токен `Bearer mock-jwt-admin`; обычные пользовательские запросы используют `mock-jwt-{{userId}}`. Прямые порты сервисов и брокера с хоста не публикуются в Docker Compose."
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "mock-jwt-{{userId}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.collectionVariables.set('date', new Date().toISOString().slice(0, 10));"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "gateway",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "userId",
+      "value": "demo-user-1"
+    },
+    {
+      "key": "productId",
+      "value": "product-123"
+    },
+    {
+      "key": "entryId",
+      "value": ""
+    },
+    {
+      "key": "recommendationId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Проверка окружения",
+      "item": [
+        {
+          "name": "Gateway: health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gateway}}/health",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "health"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Брокер (мок RabbitMQ): очереди и подписки",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gateway}}/admin/broker/queues",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "admin",
+                "broker",
+                "queues"
+              ]
+            },
+            "description": "Показывает очереди nutrition-service, recommendation-service, diary-service.compensation и счётчики delivered / retried / deadLettered.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "mock-jwt-admin",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 200', () => pm.response.to.have.status(200));",
+                  "pm.test('оформлены подписки сервисов', () => pm.expect(pm.response.json().items.length).to.be.at.least(3));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "A. Happy path: профиль → дневник → сводка → рекомендации",
+      "item": [
+        {
+          "name": "A1. Создать профиль (новый пользователь)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gateway}}/api/v1/profiles",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "profiles"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"age\": 21,\n  \"gender\": \"female\",\n  \"height\": 173,\n  \"weight\": 60,\n  \"activityLevel\": \"low\",\n  \"goal\": \"weight_loss\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Генерирует нового userId для прогона. Логи: api-gateway (токен проверен, маршрут → profile-service) и profile-service (запрос получен, профиль создан)."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const id = 'demo-' + Date.now().toString(36);",
+                  "pm.collectionVariables.set('userId', id);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 201', () => pm.response.to.have.status(201));",
+                  "pm.test('профиль создан', () => pm.expect(pm.response.json().goal).to.eql('weight_loss'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "A2. Нормы питания (sync nutrition → profile)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gateway}}/api/v1/nutrition/norms",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "nutrition",
+                "norms"
+              ]
+            },
+            "description": "Логи nutrition-service: SYNC → вызываю profile-service; логи profile-service: запрос на /internal/v1/profiles/{userId}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 200', () => pm.response.to.have.status(200));",
+                  "pm.test('есть суточная норма', () => pm.expect(pm.response.json().dailyCalories).to.be.a('number'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "A3. Поиск продуктов",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gateway}}/api/v1/products?query=овсян",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "products"
+              ],
+              "query": [
+                {
+                  "key": "query",
+                  "value": "овсян"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 200', () => pm.response.to.have.status(200));",
+                  "const p = pm.response.json().items[0]; pm.collectionVariables.set('productId', p.productId);",
+                  "pm.test('найден продукт', () => pm.expect(p.name).to.include('Овсян'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "A4. Добавить запись в дневник (sync diary → food, async MealEntryCreated)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gateway}}/api/v1/diary/entries",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diary",
+                "entries"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"mealType\": \"breakfast\",\n  \"quantity\": 100,\n  \"unit\": \"g\",\n  \"date\": \"{{date}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Логи diary-service: SYNC → food-service, OUTBOX: событие MealEntryCreated. Затем: брокер DELIVER → nutrition-service; nutrition-service: EVENT ← MealEntryCreated, SYNC → profile-service, OUTBOX DailyNutritionSummaryUpdated; recommendation-service: EVENT ← DailyNutritionSummaryUpdated. Во всех строках один и тот же req=..."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 201', () => pm.response.to.have.status(201));",
+                  "const j = pm.response.json(); pm.collectionVariables.set('entryId', j.entryId);",
+                  "pm.test('КБЖУ рассчитано по данным food-service', () => pm.expect(j.calories).to.eql(370));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "A5. Дневная сводка питания (обновлена событием)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gateway}}/api/v1/nutrition/daily-summary?date={{date}}",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "nutrition",
+                "daily-summary"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "{{date}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const end = Date.now() + 1000; while (Date.now() < end) {}  // 1 с: событие идёт через брокер асинхронно"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 200', () => pm.response.to.have.status(200));",
+                  "const s = pm.response.json();",
+                  "pm.test('сводка учла запись', () => pm.expect(s.consumedCalories).to.be.at.least(370));",
+                  "pm.test('остаток считается от нормы', () => pm.expect(s.remainingCalories).to.eql(s.dailyCaloriesGoal - s.consumedCalories));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "A6. Персональные рекомендации (сформированы по событию)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gateway}}/api/v1/recommendations",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "recommendations"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const end = Date.now() + 1000; while (Date.now() < end) {}  // 1 с: событие идёт через брокер асинхронно"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 200', () => pm.response.to.have.status(200));",
+                  "pm.test('есть рекомендация', () => pm.expect(pm.response.json().total).to.be.at.least(1));",
+                  "pm.collectionVariables.set('recommendationId', pm.response.json().items[0].recommendationId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "A7. Отметить рекомендацию просмотренной",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gateway}}/api/v1/recommendations/{{recommendationId}}",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "recommendations",
+                "{{recommendationId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"viewed\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 200', () => pm.response.to.have.status(200));",
+                  "pm.test('статус обновлён', () => pm.expect(pm.response.json().status).to.eql('viewed'));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "Успешный сквозной сценарий через API Gateway. Запускать по порядку."
+    },
+    {
+      "name": "B. Идемпотентность (Idempotency-Key)",
+      "item": [
+        {
+          "name": "B1. Создать запись с ключом",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{replayKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gateway}}/api/v1/diary/entries",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diary",
+                "entries"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"mealType\": \"breakfast\",\n  \"quantity\": 100,\n  \"unit\": \"g\",\n  \"date\": \"{{date}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('replayKey', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('replayEntryId', pm.response.json().entryId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "B2. Повтор с тем же ключом → тот же ответ, дубликата нет",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{replayKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gateway}}/api/v1/diary/entries",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diary",
+                "entries"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"mealType\": \"breakfast\",\n  \"quantity\": 100,\n  \"unit\": \"g\",\n  \"date\": \"{{date}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "В логе diary-service: IDEMPOTENCY: повторный запрос с тем же ключом — операция не выполняется."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 201', () => pm.response.to.have.status(201));",
+                  "pm.test('тот же entryId', () => pm.expect(pm.response.json().entryId).to.eql(pm.collectionVariables.get('replayEntryId')));",
+                  "pm.test('заголовок Idempotent-Replayed', () => pm.expect(pm.response.headers.get('Idempotent-Replayed')).to.eql('true'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "B3. Тот же ключ, другое тело → 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{replayKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gateway}}/api/v1/diary/entries",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diary",
+                "entries"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"mealType\": \"breakfast\",\n  \"quantity\": 999,\n  \"unit\": \"g\",\n  \"date\": \"{{date}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 422', () => pm.response.to.have.status(422));",
+                  "pm.test('код ошибки', () => pm.expect(pm.response.json().code).to.eql('IDEMPOTENCY_KEY_REUSED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "B4. Без Idempotency-Key → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gateway}}/api/v1/diary/entries",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diary",
+                "entries"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"mealType\": \"breakfast\",\n  \"quantity\": 100,\n  \"unit\": \"g\",\n  \"date\": \"{{date}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 400', () => pm.response.to.have.status(400));",
+                  "pm.test('код ошибки', () => pm.expect(pm.response.json().code).to.eql('IDEMPOTENCY_KEY_REQUIRED'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "C. Единая модель ошибок (RFC 7807) и Gateway",
+      "item": [
+        {
+          "name": "C1. Ошибка валидации → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gateway}}/api/v1/diary/entries",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diary",
+                "entries"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"mealType\": \"brunch\",\n  \"quantity\": -5,\n  \"unit\": \"g\",\n  \"date\": \"{{date}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 400', () => pm.response.to.have.status(400));",
+                  "const p = pm.response.json();",
+                  "pm.test('Content-Type: application/problem+json', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/problem+json'));",
+                  "pm.test('поля RFC 7807 + code/message', () => { pm.expect(p).to.include.keys('type','title','status','detail','instance','code','message'); });",
+                  "pm.test('перечислены ошибочные поля', () => pm.expect(p.details.errors.length).to.eql(2));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "C2. Продукт не найден → 404",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gateway}}/api/v1/diary/entries",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diary",
+                "entries"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"no-such-product\",\n  \"mealType\": \"breakfast\",\n  \"quantity\": 100,\n  \"unit\": \"g\",\n  \"date\": \"{{date}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "В логах: diary-service → SYNC → food-service, food-service отвечает 404, diary переводит в PRODUCT_NOT_FOUND."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 404', () => pm.response.to.have.status(404));",
+                  "pm.test('код', () => pm.expect(pm.response.json().code).to.eql('PRODUCT_NOT_FOUND'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "C3. Без токена → 401 (запрос не доходит до сервисов)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gateway}}/api/v1/diary/entries",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diary",
+                "entries"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "C4. Внутренний маршрут через Gateway недоступен → 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gateway}}/internal/v1/products/product-123",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "internal",
+                "v1",
+                "products",
+                "product-123"
+              ]
+            },
+            "description": "/internal/* наружу не публикуется. Сравните с прямым вызовом сервиса: GET {{food}}/internal/v1/products/product-123 → 200."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "C6. Сервис спроектирован, но не реализован → 501",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gateway}}/api/v1/recipes",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "recipes"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 501', () => pm.response.to.have.status(501));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "D. Сбой при синхронном вызове: food-service недоступен",
+      "item": [
+        {
+          "name": "D1. Выключить food-service (имитация)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gateway}}/admin/services/food/chaos",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "admin",
+                "services",
+                "food",
+                "chaos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mode\": \"down\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Административный маршрут API Gateway (доступен только администратору): переключает режим имитации сбоя. В логах сервиса: CHAOS: режим ... \"down\".",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "mock-jwt-admin",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('режим = down', () => pm.expect(pm.response.json().chaos.mode).to.eql('down'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "D2. Создать запись → 503, ничего не сохранено",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gateway}}/api/v1/diary/entries",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diary",
+                "entries"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"mealType\": \"breakfast\",\n  \"quantity\": 100,\n  \"unit\": \"g\",\n  \"date\": \"{{date}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Логи diary-service: SYNC ✗ food-service недоступен / ответ 503; запись и событие НЕ создаются (компенсировать нечего)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 503', () => pm.response.to.have.status(503));",
+                  "pm.test('код', () => pm.expect(pm.response.json().code).to.eql('SERVICE_UNAVAILABLE'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "D3. Включить food-service",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gateway}}/admin/services/food/chaos",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "admin",
+                "services",
+                "food",
+                "chaos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mode\": \"ok\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Административный маршрут API Gateway (доступен только администратору): переключает режим имитации сбоя. В логах сервиса: CHAOS: режим ... \"ok\".",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "mock-jwt-admin",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('режим = ok', () => pm.expect(pm.response.json().chaos.mode).to.eql('ok'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "E. Сбой при асинхронной обработке: nutrition-service недоступен → повторная доставка",
+      "item": [
+        {
+          "name": "E1. Выключить nutrition-service",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gateway}}/admin/services/nutrition/chaos",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "admin",
+                "services",
+                "nutrition",
+                "chaos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mode\": \"down\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Административный маршрут API Gateway (доступен только администратору): переключает режим имитации сбоя. В логах сервиса: CHAOS: режим ... \"down\".",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "mock-jwt-admin",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('режим = down', () => pm.expect(pm.response.json().chaos.mode).to.eql('down'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "E2. Создать запись → 201 (пользователь не ждёт nutrition)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gateway}}/api/v1/diary/entries",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diary",
+                "entries"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"mealType\": \"breakfast\",\n  \"quantity\": 100,\n  \"unit\": \"g\",\n  \"date\": \"{{date}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Логи брокера: DELIVER → nutrition-service, NACK ✗ ... перемещаю в Retry Queue, повтор через 3000 мс."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "E3. Брокер: идёт повторная доставка",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gateway}}/admin/broker/queues",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "admin",
+                "broker",
+                "queues"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "mock-jwt-admin",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 200', () => pm.response.to.have.status(200));",
+                  "const q = pm.response.json().items.find(i => i.queue === 'nutrition-service');",
+                  "pm.test('есть повторы', () => pm.expect(q.retried).to.be.at.least(1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "E4. Включить nutrition-service",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gateway}}/admin/services/nutrition/chaos",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "admin",
+                "services",
+                "nutrition",
+                "chaos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mode\": \"ok\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Административный маршрут API Gateway (доступен только администратору): переключает режим имитации сбоя. В логах сервиса: CHAOS: режим ... \"ok\".",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "mock-jwt-admin",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('режим = ok', () => pm.expect(pm.response.json().chaos.mode).to.eql('ok'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "E5. Сводка синхронизировалась после повтора (ждёт 5 с)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gateway}}/api/v1/nutrition/daily-summary?date={{date}}",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "nutrition",
+                "daily-summary"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "{{date}}"
+                }
+              ]
+            },
+            "description": "Логи брокера: DELIVER (попытка N) → ACK ✓. Данные согласованы (eventual consistency) — как на sequence-failure."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const end = Date.now() + 5000; while (Date.now() < end) {}  // пауза 5 с: ждём повторные доставки брокера"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 200', () => pm.response.to.have.status(200));",
+                  "pm.test('запись учтена', () => pm.expect(pm.response.json().consumedCalories).to.be.at.least(740));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "Соответствует диаграмме sequence-failure.md."
+    },
+    {
+      "name": "F. Сага с компенсацией: nutrition-service не восстановился",
+      "item": [
+        {
+          "name": "F1. Выключить nutrition-service",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gateway}}/admin/services/nutrition/chaos",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "admin",
+                "services",
+                "nutrition",
+                "chaos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mode\": \"down\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Административный маршрут API Gateway (доступен только администратору): переключает режим имитации сбоя. В логах сервиса: CHAOS: режим ... \"down\".",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "mock-jwt-admin",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('режим = down', () => pm.expect(pm.response.json().chaos.mode).to.eql('down'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "F2. Создать запись → 201",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gateway}}/api/v1/diary/entries",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diary",
+                "entries"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"mealType\": \"breakfast\",\n  \"quantity\": 100,\n  \"unit\": \"g\",\n  \"date\": \"{{date}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('sagaEntryId', pm.response.json().entryId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "F3. Запись пока существует → 200",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gateway}}/api/v1/diary/entries/{{sagaEntryId}}",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diary",
+                "entries",
+                "{{sagaEntryId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "F4. Через ~15 с: запись откатана компенсацией → 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gateway}}/api/v1/diary/entries/{{sagaEntryId}}",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "diary",
+                "entries",
+                "{{sagaEntryId}}"
+              ]
+            },
+            "description": "5 попыток × 3 с → DEAD-LETTER → событие MealEntryCreated.DeadLettered → diary-service: COMPENSATION: запись откатана."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const end = Date.now() + 15000; while (Date.now() < end) {}  // пауза 15 с: ждём повторные доставки брокера"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 404', () => pm.response.to.have.status(404));",
+                  "pm.test('код', () => pm.expect(pm.response.json().code).to.eql('ENTRY_NOT_FOUND'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "F5. diary-service: журнал компенсаций",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gateway}}/admin/diary/compensations",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "admin",
+                "diary",
+                "compensations"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "mock-jwt-admin",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 200', () => pm.response.to.have.status(200));",
+                  "pm.test('компенсация выполнена', () => pm.expect(pm.response.json().items.some(c => c.entryId === pm.collectionVariables.get('sagaEntryId'))).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "F6. Брокер: сообщение в Dead Letter Queue",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gateway}}/admin/broker/dlq",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "admin",
+                "broker",
+                "dlq"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "mock-jwt-admin",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('статус 200', () => pm.response.to.have.status(200));",
+                  "pm.test('в DLQ есть сообщение', () => pm.expect(pm.response.json().total).to.be.at.least(1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "F7. Включить nutrition-service",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gateway}}/admin/services/nutrition/chaos",
+              "protocol": "http",
+              "host": [
+                "{{gateway}}"
+              ],
+              "path": [
+                "admin",
+                "services",
+                "nutrition",
+                "chaos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mode\": \"ok\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Административный маршрут API Gateway (доступен только администратору): переключает режим имитации сбоя. В логах сервиса: CHAOS: режим ... \"ok\".",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "mock-jwt-admin",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('режим = ok', () => pm.expect(pm.response.json().chaos.mode).to.eql('ok'));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "Сквозной сценарий на 3 сервиса (diary → nutrition → diary) + брокер; сбой и компенсирующее действие."
+    }
+  ]
+}

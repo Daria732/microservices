@@ -1,0 +1,55 @@
+# Локальный запуск всей системы: docker compose up --build
+# Один образ, разные команды запуска. Брокер — мок RabbitMQ (mocks/message-broker).
+x-node: &node
+  build: .
+  image: foodfit-node
+  restart: "no"
+  environment: &env
+    BROKER_URL: http://message-broker:3100
+    PROFILE_SERVICE_URL: http://profile-service:3001
+    FOOD_SERVICE_URL: http://food-service:3002
+    DIARY_SERVICE_URL: http://diary-service:3003
+    NUTRITION_SERVICE_URL: http://nutrition-service:3004
+    RECOMMENDATION_SERVICE_URL: http://recommendation-service:3005
+
+services:
+  message-broker:
+    <<: *node
+    command: ["node", "mocks/message-broker/index.js"]
+    environment: { RETRY_DELAY_MS: "3000", MAX_ATTEMPTS: "5" }
+
+  profile-service:
+    <<: *node
+    command: ["node", "services/profile-service/index.js"]
+    environment: { <<: *env, SELF_URL: "http://profile-service:3001" }
+    depends_on: [message-broker]
+
+  food-service:
+    <<: *node
+    command: ["node", "services/food-service/index.js"]
+    environment: { <<: *env, SELF_URL: "http://food-service:3002" }
+
+  diary-service:
+    <<: *node
+    command: ["node", "services/diary-service/index.js"]
+    environment: { <<: *env, SELF_URL: "http://diary-service:3003" }
+    depends_on: [message-broker, food-service]
+
+  nutrition-service:
+    <<: *node
+    command: ["node", "services/nutrition-service/index.js"]
+    environment: { <<: *env, SELF_URL: "http://nutrition-service:3004" }
+    depends_on: [message-broker, profile-service]
+
+  recommendation-service:
+    <<: *node
+    command: ["node", "services/recommendation-service/index.js"]
+    environment: { <<: *env, SELF_URL: "http://recommendation-service:3005" }
+    depends_on: [message-broker, nutrition-service, profile-service]
+
+  api-gateway:
+    <<: *node
+    command: ["node", "services/api-gateway/index.js"]
+    environment: { <<: *env, PORT: "8080" }
+    ports: ["8080:8080"]
+    depends_on: [profile-service, food-service, diary-service, nutrition-service, recommendation-service]

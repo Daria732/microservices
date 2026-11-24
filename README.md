@@ -374,3 +374,122 @@ FoodFit представляет собой мобильное приложен�
 - [`api/recommendation-service.yaml`](api/recommendation-service.yaml) — персональные рекомендации
 
 Все спецификации используют OpenAPI 3.0.3, содержат внешние и внутренние эндпоинты (тег `Internal`), единую модель ошибок (`Error`), заголовок `Idempotency-Key` для операций создания/изменения/удаления, пагинацию для списков и схемы асинхронных событий в `components/schemas`.
+
+---
+
+# Лабораторная работа №4. Реализация микросервисов
+
+Реализована микросервисная система FoodFit, спроектированная в лабораторной работе №3. Особое внимание уделено корректности взаимодействий (синхронных и асинхронных) согласно OpenAPI-контрактам, идемпотентности, единой модели ошибок и сквозному сценарию с компенсацией.
+
+## 1. Выбор стека технологий
+
+**Node.js 22 (чистый JavaScript, без внешних фреймворков)** для всех сервисов.
+
+* Один стек на все сервисы — общая библиотека `services/shared` (HTTP-слой, логирование, идемпотентность, Outbox, клиент синхронных вызовов, модель ошибок). Это убирает дублирование и гарантирует **единообразие** ошибок и логов.
+* Сервисы в основном I/O-bound (REST-вызовы, события), поэтому событийная модель Node.js подходит естественно; встроенные `fetch`, `AbortSignal.timeout`, `node:test` покрывают вызовы с таймаутами и тесты без сторонних зависимостей.
+* Минимум зависимостей = быстрый и воспроизводимый запуск (`node` + опционально `winston`).
+* **Логирование:** библиотека `winston` (`services/shared/logger.js`); если пакет не установлен, используется запасной вывод в `console` с тем же форматом. Во всех строках автоматически присутствуют `requestId` и `userId` (через `AsyncLocalStorage`).
+* Тесты: встроенный `node:test`. Контейнеризация: Docker + Docker Compose (опционально).
+
+## 2. Реализованные сервисы
+
+| Сервис | Порт | Хранилище | Роль |
+|---|---|---|---|
+| api-gateway | 8080 | — | единая точка входа, проверка токена, маршрутизация |
+| profile-service | 3001 | in-memory (`profile_db`) | профиль пользователя, событие `UserProfileUpdated` |
+| food-service | 3002 | in-memory (`food_db`) | каталог продуктов, домашние запасы |
+| diary-service | 3003 | in-memory (`diary_db`) + outbox | дневник питания, события `MealEntryCreated/Updated/Deleted`, компенсация |
+| nutrition-service | 3004 | in-memory (`nutrition_db`) + outbox | нормы питания, дневная сводка, `DailyNutritionSummaryUpdated` |
+| recommendation-service | 3005 | in-memory (`recommendation_db`) | персональные рекомендации |
+| message-broker (мок RabbitMQ) | 3100 | in-memory | очереди, ack, Retry Queue, DLQ |
+
+Реализовано **5 бизнес-сервисов** (требование — не менее 4). `activity-service` и `recipe-service` в этой работе не реализованы (gateway отвечает `501 NOT_IMPLEMENTED`); их контракты остаются в `docs/`/OpenAPI из лабораторной №3. Все публичные и внутренние эндпоинты реализованных сервисов повторяют OpenAPI-спецификации.
+
+## 3. Взаимодействия: реальные и моки
+
+**Синхронные (REST), все — реальные вызовы между сервисами:**
+
+| Вызов | Эндпоинт |
+|---|---|
+| diary → food | `GET /internal/v1/products/{productId}` |
+| nutrition → profile | `GET /internal/v1/profiles/{userId}` |
+| recommendation → nutrition | `GET /internal/v1/nutrition/daily-summary` |
+| recommendation → profile | `GET /internal/v1/profiles/{userId}` |
+
+**Асинхронные (события в формате из контрактов), публикация и обработка — реальные, транспорт — мок:**
+
+| Событие | Издатель → подписчик |
+|---|---|
+| `MealEntryCreated` / `Updated` / `Deleted` | diary → nutrition |
+| `DailyNutritionSummaryUpdated` | nutrition → recommendation |
+| `UserProfileUpdated` | profile → nutrition, recommendation |
+| `RecommendationGenerated` | recommendation → (подписчиков нет) |
+| `MealEntryCreated.DeadLettered` (служебное) | брокер → diary (компенсация) |
+
+**Моки и упрощения:**
+
+| Что | Чем заменено |
+|---|---|
+| RabbitMQ | `mocks/message-broker` — in-memory брокер с повторной доставкой (Retry Queue) и Dead Letter Queue |
+| Kong | минимальный gateway на Node.js |
+| Keycloak / JWT | мок-токен `Authorization: Bearer mock-jwt-<userId>` |
+| Open Food Facts | встроенный каталог из 10 продуктов в food-service |
+| Redis-кэш | не используется |
+
+## 4. Сквозные сценарии
+
+Подробное описание — в [`docs/demo-scenarios.md`](docs/demo-scenarios.md). Демонстрация проводится в Postman (`postman/`), параллельно смотрим логи сервисов.
+
+1. **Happy path** — профиль → запись в дневник (sync diary→food) → событие → сводка (sync nutrition→profile) → событие → рекомендации. Соответствует `sequence-success.md`.
+2. **Сбой асинхронной обработки** — nutrition недоступен → брокер повторяет доставку → после восстановления данные синхронизируются. Соответствует `sequence-failure.md`.
+3. **Сага с компенсацией** — nutrition не восстановился → после 5 попыток сообщение уходит в DLQ → diary откатывает запись дневника (хореографическая сага diary → nutrition → diary).
+4. **Сбой синхронного вызова** — food недоступен → `503`, запись не создаётся.
+
+## 5. Сквозные механизмы
+
+* **Idempotency-Key** — обязателен на POST/PUT/PATCH/DELETE (как в контрактах). Повтор с тем же ключом и телом возвращает сохранённый ответ (`Idempotent-Replayed: true`), с другим телом — `422 IDEMPOTENCY_KEY_REUSED`, без ключа — `400`. Потребители событий дополнительно дедуплицируют по `eventId` (доставка at-least-once).
+* **Единая модель ошибок** — RFC 7807 (`application/problem+json`): `type, title, status, detail, instance` + поля контрактов `code, message, details`. Одинакова во всех сервисах и в gateway.
+* **Transactional Outbox** — события сначала сохраняются, затем публикуются; при недоступном брокере остаются в outbox и отправляются позже.
+* **Логирование** — каждый сервис пишет входящие запросы, ответы, вызовы других сервисов, публикацию и получение событий; сквозной `req=` во всех сервисах и брокере.
+* **Имитация сбоев** — служебный эндпоинт `POST /admin/chaos {"mode":"down"|"ok"}` в каждом сервисе (используется только для демонстрации).
+
+Отличия/расширения относительно контрактов: ошибки недоступности зависимости возвращаются как `503` (в контрактах описан `500`); добавлены служебное событие `<Тип>.DeadLettered` и эндпоинты `/admin/*`; идентификатор пользователя передаётся от gateway в заголовке `X-User-Id` (контракты не описывают способ передачи).
+
+## 6. Запуск
+
+**Вариант 1 — без Docker (достаточно Node.js ≥ 20):**
+
+```bash
+npm install        # опционально: подключает winston (без него логи идут через console)
+npm start          # запускает брокер, 5 сервисов и gateway
+```
+
+**Вариант 2 — Docker Compose:**
+
+```bash
+docker compose up --build
+```
+
+Gateway: `http://localhost:8080`. Проверка: `curl http://localhost:8080/health`.
+
+**Демонстрация (Postman):** импортировать `postman/FoodFit-lab4.postman_collection.json` и выполнять запросы по папкам A → F. В коллекции заданы переменные (`gateway`, `broker`, `diary` и т.д.), токен подставляется автоматически.
+
+**Тесты:**
+
+```bash
+npm test               # unit + интеграционные (21 тест)
+```
+
+Unit-тесты: расчёт норм (Mifflin-St Jeor), сводка КБЖУ, правила рекомендаций, валидация, идемпотентность, Problem Details. Интеграционные: вся система через gateway (happy path, ошибки, идемпотентность, сбои, компенсация, дубликаты событий) и брокер (повторы → DLQ).
+
+## 7. Структура репозитория (дополнение к лабораторной №3)
+
+```text
+services/            исходный код: api-gateway, profile-, food-, diary-, nutrition-, recommendation-service, shared/
+mocks/               мок брокера сообщений (RabbitMQ)
+postman/             коллекция для демонстрации
+docs/demo-scenarios.md   описание сценариев (успешный и со сбоем)
+tests/               unit- и интеграционные тесты
+scripts/start-all.js локальный запуск без Docker
+docker-compose.yml, Dockerfile
+```

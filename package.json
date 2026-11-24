@@ -1,0 +1,16 @@
+{
+  "name": "foodfit-microservices",
+  "version": "1.0.0",
+  "description": "FoodFit — лабораторная работа №4: реализация микросервисов",
+  "private": true,
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node scripts/start-all.js",
+    "test": "node --test tests/*.test.js",
+    "test:unit": "node --test tests/unit.test.js",
+    "test:integration": "node --test tests/integration.test.js"
+  },
+  "dependencies": {
+    "winston": "^3.13.0"
+  }
+}
