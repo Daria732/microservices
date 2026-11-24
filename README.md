@@ -360,19 +360,17 @@ FoodFit представляет собой мобильное приложен�
   "occurredAt": "2026-11-24T12:00:00Z",
   "schemaVersion": "1.0",
   "payload": { }
-}```
+}
+```
 
 ### 7. Ссылки на OpenAPI-файлы
-api/profile-service.yaml — профиль пользователя
 
-api/food-service.yaml — каталог продуктов и запасы
+- [`api/profile-service.yaml`](api/profile-service.yaml) — профиль пользователя
+- [`api/food-service.yaml`](api/food-service.yaml) — каталог продуктов и запасы
+- [`api/diary-service.yaml`](api/diary-service.yaml) — дневник питания
+- [`api/nutrition-service.yaml`](api/nutrition-service.yaml) — нормы и статистика питания
+- [`api/activity-service.yaml`](api/activity-service.yaml) — физическая активность
+- [`api/recipe-service.yaml`](api/recipe-service.yaml) — рецепты
+- [`api/recommendation-service.yaml`](api/recommendation-service.yaml) — персональные рекомендации
 
-api/diary-service.yaml — дневник питания
-
-api/nutrition-service.yaml — нормы и статистика питания
-
-api/activity-service.yaml — физическая активность
-
-api/recipe-service.yaml — рецепты
-
-api/recommendation-service.yaml — персональные рекомендации
+Все спецификации используют OpenAPI 3.0.3, содержат внешние и внутренние эндпоинты (тег `Internal`), единую модель ошибок (`Error`), заголовок `Idempotency-Key` для операций создания/изменения/удаления, пагинацию для списков и схемы асинхронных событий в `components/schemas`.
