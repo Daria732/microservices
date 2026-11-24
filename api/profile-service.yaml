@@ -1,0 +1,372 @@
+openapi: 3.0.3
+
+info:
+  title: Profile Service API
+  description: API микросервиса управления профилем пользователя FoodFit.
+  version: 1.0.0
+
+servers:
+  - url: /
+    description: Базовый адрес; полные пути указаны в разделе paths
+
+tags:
+  - name: Profile
+    description: Операции с профилем пользователя
+  - name: Internal
+    description: Внутренние операции для взаимодействия микросервисов
+
+paths:
+  /api/v1/profiles:
+    post:
+      tags:
+        - Profile
+      summary: Создание профиля пользователя
+      operationId: createProfile
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfileCreateRequest'
+            example:
+              userId: user-123
+              age: 21
+              gender: female
+              height: 173
+              weight: 60
+              activityLevel: low
+              goal: weight_loss
+      responses:
+        '201':
+          description: Профиль успешно создан
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Profile'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/profiles/{userId}:
+    get:
+      tags:
+        - Profile
+      summary: Получение профиля пользователя
+      operationId: getProfile
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Профиль найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Profile'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    put:
+      tags:
+        - Profile
+      summary: Обновление профиля пользователя
+      operationId: updateProfile
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfileUpdateRequest'
+      responses:
+        '200':
+          description: Профиль успешно обновлён
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Profile'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /internal/v1/profiles/{userId}:
+    get:
+      tags:
+        - Internal
+      summary: Получение данных профиля другим микросервисом
+      operationId: getProfileInternal
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Данные профиля получены
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Profile'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  parameters:
+    UserId:
+      name: userId
+      in: path
+      required: true
+      description: Идентификатор пользователя
+      schema:
+        type: string
+        example: user-123
+
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Уникальный ключ для защиты от повторного выполнения операции
+      schema:
+        type: string
+        example: 550e8400-e29b-41d4-a716-446655440000
+
+  schemas:
+    ProfileCreateRequest:
+      type: object
+      required:
+        - userId
+        - age
+        - gender
+        - height
+        - weight
+        - activityLevel
+        - goal
+      properties:
+        userId:
+          type: string
+          example: user-123
+        age:
+          type: integer
+          minimum: 14
+          maximum: 100
+        gender:
+          type: string
+          enum:
+            - female
+            - male
+        height:
+          type: number
+          description: Рост в сантиметрах
+          example: 173
+        weight:
+          type: number
+          description: Вес в килограммах
+          example: 60
+        activityLevel:
+          type: string
+          enum:
+            - low
+            - moderate
+            - high
+            - very_high
+        goal:
+          type: string
+          enum:
+            - weight_loss
+            - maintenance
+            - weight_gain
+
+    ProfileUpdateRequest:
+      type: object
+      properties:
+        age:
+          type: integer
+          minimum: 14
+          maximum: 100
+        gender:
+          type: string
+          enum:
+            - female
+            - male
+        height:
+          type: number
+          description: Рост в сантиметрах
+        weight:
+          type: number
+          description: Вес в килограммах
+        activityLevel:
+          type: string
+          enum:
+            - low
+            - moderate
+            - high
+            - very_high
+        goal:
+          type: string
+          enum:
+            - weight_loss
+            - maintenance
+            - weight_gain
+        preferences:
+          type: array
+          items:
+            type: string
+        excludedProducts:
+          type: array
+          items:
+            type: string
+
+    Profile:
+      type: object
+      required:
+        - userId
+        - age
+        - gender
+        - height
+        - weight
+        - activityLevel
+        - goal
+      properties:
+        userId:
+          type: string
+          example: user-123
+        age:
+          type: integer
+          example: 21
+        gender:
+          type: string
+          enum:
+            - female
+            - male
+        height:
+          type: number
+          example: 173
+        weight:
+          type: number
+          example: 60
+        activityLevel:
+          type: string
+        goal:
+          type: string
+        preferences:
+          type: array
+          items:
+            type: string
+        excludedProducts:
+          type: array
+          items:
+            type: string
+        updatedAt:
+          type: string
+          format: date-time
+
+    UserProfileUpdatedPayload:
+      type: object
+      description: Данные об изменениях профиля пользователя
+      properties:
+        userId:
+          type: string
+        age:
+          type: integer
+        gender:
+          type: string
+        height:
+          type: number
+        weight:
+          type: number
+        activityLevel:
+          type: string
+        goal:
+          type: string
+
+    UserProfileUpdatedEvent:
+      type: object
+      description: Событие обновления профиля пользователя для RabbitMQ
+      required:
+        - eventId
+        - eventType
+        - occurredAt
+        - schemaVersion
+        - payload
+      properties:
+        eventId:
+          type: string
+          format: uuid
+        eventType:
+          type: string
+          example: UserProfileUpdated
+        occurredAt:
+          type: string
+          format: date-time
+        schemaVersion:
+          type: string
+          example: "1.0"
+        payload:
+          $ref: '#/components/schemas/UserProfileUpdatedPayload'
+
+    Error:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          example: VALIDATION_ERROR
+        message:
+          type: string
+          example: Некорректные входные данные
+        details:
+          type: object
+          additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Некорректные входные данные
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: VALIDATION_ERROR
+            message: Проверьте корректность переданных данных
+
+    NotFound:
+      description: Профиль не найден
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: PROFILE_NOT_FOUND
+            message: Профиль пользователя не найден
+
+    Conflict:
+      description: Профиль уже существует
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: PROFILE_ALREADY_EXISTS
+            message: Профиль пользователя уже существует
+
+    InternalError:
+      description: Внутренняя ошибка сервера
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: INTERNAL_ERROR
+            message: Произошла внутренняя ошибка сервера

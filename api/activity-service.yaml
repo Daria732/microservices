@@ -1,0 +1,322 @@
+openapi: 3.0.3
+
+info:
+  title: Activity Service API
+  description: Микросервис учёта физической активности пользователей FoodFit.
+  version: 1.0.0
+
+servers:
+  - url: /
+    description: Базовый адрес; полные пути указаны в разделе paths
+
+tags:
+  - name: Activity
+    description: Операции с физической активностью
+  - name: Internal
+    description: Внутренние операции микросервисов
+
+paths:
+  /api/v1/activities:
+    get:
+      tags:
+        - Activity
+      summary: Получение списка видов активности
+      operationId: getActivities
+      responses:
+        '200':
+          description: Список доступных видов активности
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Activity'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/activities/records:
+    get:
+      tags:
+        - Activity
+      summary: Получение записей физической активности
+      operationId: getActivityRecords
+      parameters:
+        - name: date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Список записей активности
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivityRecordList'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    post:
+      tags:
+        - Activity
+      summary: Добавление записи о физической активности
+      operationId: createActivityRecord
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActivityRecordRequest'
+            example:
+              activityId: walking
+              durationMinutes: 30
+              date: "2026-11-24"
+      responses:
+        '201':
+          description: Запись об активности создана
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivityRecord'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/activities/records/{recordId}:
+    get:
+      tags:
+        - Activity
+      summary: Получение записи активности
+      operationId: getActivityRecord
+      parameters:
+        - $ref: '#/components/parameters/RecordId'
+      responses:
+        '200':
+          description: Запись найдена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivityRecord'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    delete:
+      tags:
+        - Activity
+      summary: Удаление записи активности
+      operationId: deleteActivityRecord
+      parameters:
+        - $ref: '#/components/parameters/RecordId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '204':
+          description: Запись удалена
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  parameters:
+    RecordId:
+      name: recordId
+      in: path
+      required: true
+      schema:
+        type: string
+      example: activity-record-123
+
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Уникальный ключ для защиты от повторного выполнения операции
+      schema:
+        type: string
+        example: 550e8400-e29b-41d4-a716-446655440000
+
+  schemas:
+    Activity:
+      type: object
+      properties:
+        activityId:
+          type: string
+          example: walking
+        name:
+          type: string
+          example: Ходьба
+        description:
+          type: string
+          example: Прогулка пешком
+        caloriesPerMinute:
+          type: number
+          example: 3.5
+
+    ActivityRecordRequest:
+      type: object
+      required:
+        - activityId
+        - durationMinutes
+        - date
+      properties:
+        activityId:
+          type: string
+        durationMinutes:
+          type: integer
+          minimum: 1
+          example: 30
+        date:
+          type: string
+          format: date
+        notes:
+          type: string
+          nullable: true
+
+    ActivityRecord:
+      type: object
+      properties:
+        recordId:
+          type: string
+        userId:
+          type: string
+        activityId:
+          type: string
+        activityName:
+          type: string
+        durationMinutes:
+          type: integer
+        burnedCalories:
+          type: number
+          example: 105
+        date:
+          type: string
+          format: date
+        createdAt:
+          type: string
+          format: date-time
+
+    ActivityRecordList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActivityRecord'
+        page:
+          type: integer
+        pageSize:
+          type: integer
+        total:
+          type: integer
+
+    ActivityRecordedPayload:
+      type: object
+      properties:
+        recordId:
+          type: string
+        userId:
+          type: string
+        activityId:
+          type: string
+        durationMinutes:
+          type: integer
+        burnedCalories:
+          type: number
+        date:
+          type: string
+          format: date
+
+    ActivityRecordedEvent:
+      type: object
+      description: Событие регистрации физической активности для RabbitMQ
+      required:
+        - eventId
+        - eventType
+        - occurredAt
+        - schemaVersion
+        - payload
+      properties:
+        eventId:
+          type: string
+          format: uuid
+        eventType:
+          type: string
+          example: ActivityRecorded
+        occurredAt:
+          type: string
+          format: date-time
+        schemaVersion:
+          type: string
+          example: "1.0"
+        payload:
+          $ref: '#/components/schemas/ActivityRecordedPayload'
+
+    Error:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          example: VALIDATION_ERROR
+        message:
+          type: string
+          example: Некорректные входные данные
+        details:
+          type: object
+          additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Некорректный запрос
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: VALIDATION_ERROR
+            message: Проверьте корректность переданных данных
+
+    NotFound:
+      description: Вид активности или запись не найдены
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: ACTIVITY_NOT_FOUND
+            message: Запрашиваемая запись не найдена
+
+    InternalError:
+      description: Внутренняя ошибка сервера
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: INTERNAL_ERROR
+            message: Произошла внутренняя ошибка сервера

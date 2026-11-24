@@ -1,0 +1,240 @@
+openapi: 3.0.3
+
+info:
+  title: Recipe Service API
+  description: Микросервис поиска и предоставления рецептов FoodFit.
+  version: 1.0.0
+
+servers:
+  - url: /
+    description: Базовый адрес; полные пути указаны в разделе paths
+
+tags:
+  - name: Recipes
+    description: Операции с рецептами
+  - name: Internal
+    description: Внутренние операции микросервисов
+
+paths:
+  /api/v1/recipes:
+    get:
+      tags:
+        - Recipes
+      summary: Получение списка рецептов
+      operationId: getRecipes
+      parameters:
+        - name: query
+          in: query
+          required: false
+          description: Поисковый запрос по названию рецепта
+          schema:
+            type: string
+        - name: maxCalories
+          in: query
+          required: false
+          description: Максимальная калорийность порции
+          schema:
+            type: number
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Список рецептов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecipeList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/recipes/{recipeId}:
+    get:
+      tags:
+        - Recipes
+      summary: Получение подробной информации о рецепте
+      operationId: getRecipe
+      parameters:
+        - $ref: '#/components/parameters/RecipeId'
+      responses:
+        '200':
+          description: Информация о рецепте
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Recipe'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /internal/v1/recipes/{recipeId}:
+    get:
+      tags:
+        - Internal
+      summary: Получение рецепта другим микросервисом
+      operationId: getRecipeInternal
+      parameters:
+        - $ref: '#/components/parameters/RecipeId'
+      responses:
+        '200':
+          description: Данные рецепта
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Recipe'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  parameters:
+    RecipeId:
+      name: recipeId
+      in: path
+      required: true
+      schema:
+        type: string
+      example: recipe-123
+
+  schemas:
+    Ingredient:
+      type: object
+      properties:
+        productId:
+          type: string
+          example: product-123
+        name:
+          type: string
+          example: Овсяные хлопья
+        quantity:
+          type: number
+          example: 50
+        unit:
+          type: string
+          example: g
+
+    RecipeNutrition:
+      type: object
+      properties:
+        calories:
+          type: number
+          example: 350
+        protein:
+          type: number
+          example: 15
+        fat:
+          type: number
+          example: 10
+        carbohydrates:
+          type: number
+          example: 45
+
+    Recipe:
+      type: object
+      properties:
+        recipeId:
+          type: string
+          example: recipe-123
+        title:
+          type: string
+          example: Овсяная каша с бананом
+        description:
+          type: string
+          example: Простой вариант завтрака
+        ingredients:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ingredient'
+        instructions:
+          type: array
+          items:
+            type: string
+        preparationTimeMinutes:
+          type: integer
+          example: 15
+        servings:
+          type: integer
+          example: 1
+        nutrition:
+          $ref: '#/components/schemas/RecipeNutrition'
+        imageUrl:
+          type: string
+          format: uri
+          nullable: true
+
+    RecipeList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Recipe'
+        page:
+          type: integer
+        pageSize:
+          type: integer
+        total:
+          type: integer
+
+    Error:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          example: RESOURCE_NOT_FOUND
+        message:
+          type: string
+          example: Запрашиваемый рецепт не найден
+        details:
+          type: object
+          additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Некорректный запрос
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: VALIDATION_ERROR
+            message: Проверьте параметры запроса
+
+    NotFound:
+      description: Рецепт не найден
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: RECIPE_NOT_FOUND
+            message: Запрашиваемый рецепт не найден
+
+    InternalError:
+      description: Внутренняя ошибка сервера
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: INTERNAL_ERROR
+            message: Произошла внутренняя ошибка сервера

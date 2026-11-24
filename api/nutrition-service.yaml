@@ -1,0 +1,297 @@
+openapi: 3.0.3
+
+info:
+  title: Nutrition Service API
+  description: Микросервис расчёта норм питания и анализа дневного рациона FoodFit.
+  version: 1.0.0
+
+servers:
+  - url: /
+    description: Базовый адрес; полные пути указаны в разделе paths
+
+tags:
+  - name: Nutrition
+    description: Расчёт норм и анализ питания
+  - name: Internal
+    description: Внутренние операции микросервисов
+
+paths:
+  /api/v1/nutrition/norms:
+    get:
+      tags:
+        - Nutrition
+      summary: Получение персональных норм питания
+      operationId: getNutritionNorms
+      responses:
+        '200':
+          description: Персональные нормы питания
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NutritionNorms'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/nutrition/daily-summary:
+    get:
+      tags:
+        - Nutrition
+      summary: Получение дневной статистики питания
+      operationId: getDailySummary
+      parameters:
+        - name: date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+          example: "2026-11-24"
+      responses:
+        '200':
+          description: Дневная статистика питания
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailySummary'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/nutrition/daily-summary/history:
+    get:
+      tags:
+        - Nutrition
+      summary: Получение истории дневной статистики
+      operationId: getDailySummaryHistory
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: История дневной статистики
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailySummaryList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /internal/v1/nutrition/daily-summary:
+    get:
+      tags:
+        - Internal
+      summary: Получение дневной статистики другим микросервисом
+      operationId: getDailySummaryInternal
+      parameters:
+        - name: userId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Дневная статистика получена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailySummary'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  schemas:
+    NutritionNorms:
+      type: object
+      properties:
+        userId:
+          type: string
+        dailyCalories:
+          type: number
+          description: Рекомендуемая суточная калорийность
+          example: 1900
+        protein:
+          type: number
+          description: Суточная норма белков в граммах
+          example: 100
+        fat:
+          type: number
+          description: Суточная норма жиров в граммах
+          example: 65
+        carbohydrates:
+          type: number
+          description: Суточная норма углеводов в граммах
+          example: 220
+        calculationMethod:
+          type: string
+          example: Mifflin-St Jeor
+
+    DailySummary:
+      type: object
+      properties:
+        userId:
+          type: string
+        date:
+          type: string
+          format: date
+        consumedCalories:
+          type: number
+          example: 850
+        consumedProtein:
+          type: number
+          example: 45
+        consumedFat:
+          type: number
+          example: 30
+        consumedCarbohydrates:
+          type: number
+          example: 110
+        dailyCaloriesGoal:
+          type: number
+          example: 1900
+        remainingCalories:
+          type: number
+          example: 1050
+        updatedAt:
+          type: string
+          format: date-time
+
+    DailySummaryList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DailySummary'
+        page:
+          type: integer
+        pageSize:
+          type: integer
+        total:
+          type: integer
+
+    DailyNutritionSummaryUpdatedPayload:
+      type: object
+      properties:
+        userId:
+          type: string
+        date:
+          type: string
+          format: date
+        consumedCalories:
+          type: number
+        consumedProtein:
+          type: number
+        consumedFat:
+          type: number
+        consumedCarbohydrates:
+          type: number
+
+    DailyNutritionSummaryUpdatedEvent:
+      type: object
+      description: Событие обновления дневной статистики питания для RabbitMQ
+      required:
+        - eventId
+        - eventType
+        - occurredAt
+        - schemaVersion
+        - payload
+      properties:
+        eventId:
+          type: string
+          format: uuid
+        eventType:
+          type: string
+          example: DailyNutritionSummaryUpdated
+        occurredAt:
+          type: string
+          format: date-time
+        schemaVersion:
+          type: string
+          example: "1.0"
+        payload:
+          $ref: '#/components/schemas/DailyNutritionSummaryUpdatedPayload'
+
+    Error:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          example: VALIDATION_ERROR
+        message:
+          type: string
+          example: Некорректные входные данные
+        details:
+          type: object
+          additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Некорректный запрос
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: VALIDATION_ERROR
+            message: Указана некорректная дата
+
+    NotFound:
+      description: Данные не найдены
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: DATA_NOT_FOUND
+            message: Данные о питании не найдены
+
+    InternalError:
+      description: Внутренняя ошибка сервера
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: INTERNAL_ERROR
+            message: Произошла внутренняя ошибка сервера
